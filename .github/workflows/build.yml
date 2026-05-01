@@ -28,6 +28,24 @@ jobs:
           cp -R $GITHUB_WORKSPACE /Users/Shared/
           mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
 
+      - name: Inject Configuration, Secrets and Custom Metadata
+        run: |
+          cd /Users/Shared/telegram-ios
+
+          cat << 'EOF' > build-system/appstore-configuration.json
+          {
+            "apiId": ${{ secrets.TELEGRAM_API_ID }},
+            "apiHash": "${{ secrets.TELEGRAM_API_HASH }}",
+            "appBundleId": "com.smashgram.miokiru",
+            "isInternalBuild": false,
+            "isAppStoreBuild": false
+          }
+          EOF
+
+          APP_DISPLAY_NAME="smashGram"
+
+          find . -name "Info.plist" -exec sed -i '' -e 's/<key>CFBundleDisplayName<\/key>[[:space:]]*<string>[^<]*<\/string>/<key>CFBundleDisplayName<\/key><string>'"$APP_DISPLAY_NAME"'<\/string>/g' {} +
+
       - name: Build the App
         run: |
           set -x
