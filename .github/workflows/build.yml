@@ -31,23 +31,24 @@ jobs:
         run: |
           cd /Users/Shared/telegram-ios
 
-          # Новый формат конфигурации (актуальный для Make.py)
           cat << 'EOF' > build-system/appstore-configuration.json
           {
             "bundle_id": "com.smashgram.miokiru",
             "api_id": ${{ secrets.TELEGRAM_API_ID }},
             "api_hash": "${{ secrets.TELEGRAM_API_HASH }}",
             "team_id": "",
+            "app_center_id": "",
+            "appstore_id": "",
             "is_internal_build": false,
             "is_appstore_build": false,
             "app_specific_url_scheme": "",
             "premium_iap_product_id": "",
             "enable_siri": false,
-            "enable_icloud": false
+            "enable_icloud": false,
+            "additional_app_ids": []
           }
           EOF
 
-          # Устанавливаем Display Name
           APP_DISPLAY_NAME="smashGram"
 
           find . -name "Info.plist" -exec sh -c '
@@ -86,7 +87,6 @@ jobs:
             --configuration=release_arm64 \
             --buildNumber="$BUILD_NUMBER"
 
-          # Собираем IPA
           OUTPUT_PATH="build/artifacts"
           rm -rf "$OUTPUT_PATH"
           mkdir -p "$OUTPUT_PATH"
@@ -94,7 +94,6 @@ jobs:
             cp "$f" "$OUTPUT_PATH/"
           done
 
-          # Собираем DSYM
           mkdir -p build/DSYMs
           for f in bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/*.dSYM; do
             cp -R "$f" build/DSYMs/
