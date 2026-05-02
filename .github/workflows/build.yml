@@ -24,8 +24,16 @@ jobs:
         run: |
           set -x
           sudo mkdir -p /Users/Shared
+          sudo chown -R $(whoami) /Users/Shared
           cp -R $GITHUB_WORKSPACE /Users/Shared/
           mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
+
+          cd /Users/Shared/telegram-ios
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
+
+          echo "=== Checking submodules ==="
+          ls -la build-system/bazel-rules/ || echo "❌ bazel-rules missing"
 
       - name: Inject Configuration, Secrets and Custom Metadata
         run: |
@@ -50,12 +58,11 @@ jobs:
           EOF
 
           APP_DISPLAY_NAME="smashGram"
-
           find . -name "Info.plist" -exec sh -c '
             plutil -replace CFBundleDisplayName -string "'"$APP_DISPLAY_NAME"'" "{}"
           ' sh {} \;
 
-          echo "✅ Configuration file created:"
+          echo "✅ Configuration created:"
           cat build-system/appstore-configuration.json
 
       - name: Build the App
@@ -79,29 +86,18 @@ jobs:
 
           python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
 
-          # === ПАТЧ: убираем жёсткий exit(1) при отсутствии aps-environment ===
+          # Патч: убираем жёсткий exit(1) при отсутствии aps-environment
           python3 - <<'PYEOF'
-          import pathlib
+          import pathlib, re
           p = pathlib.Path("build-system/Make/Make.py")
           s = p.read_text()
-          old = """    if codesigning_data.aps_environment is None:
-                  print('Could not find a valid aps-environment entitlement in the provided provisioning profiles')
-                  sys.exit(1)"""
-          new = """    if codesigning_data.aps_environment is None:
-                  print('WARNING: aps-environment not found, defaulting to development')
-                  codesigning_data.aps_environment = "development" """
-          if old not in s:
-              print("⚠️ Точный блок не найден, пробуем мягкий regex-патч")
-              import re
-              s = re.sub(
-                  r"if codesigning_data\.aps_environment is None:\s*\n\s*print\([^\n]*\)\s*\n\s*sys\.exit\(1\)",
-                  'if codesigning_data.aps_environment is None:\n        codesigning_data.aps_environment = "development"',
-                  s
-              )
-          else:
-              s = s.replace(old, new)
-          p.write_text(s)
-          print("✅ Make.py patched")
+          new_s, n = re.subn(
+              r"if codesigning_data\.aps_environment is None:\s*\n\s*print\([^\n]*\)\s*\n\s*sys\.exit\(1\)",
+              'if codesigning_data.aps_environment is None:\n        codesigning_data.aps_environment = "development"',
+              s
+          )
+          p.write_text(new_s)
+          print(f"✅ Make.py patched ({n} replacement)")
           PYEOF
 
           python3 -u build-system/Make/Make.py \
