@@ -15,6 +15,25 @@ jobs:
           submodules: 'recursive'
           fetch-depth: '0'
 
+      - name: Diagnose submodules
+        run: |
+          set -x
+          cd $GITHUB_WORKSPACE
+          echo "=== .gitmodules ==="
+          cat .gitmodules || echo "❌ .gitmodules missing!"
+          echo ""
+          echo "=== build-system/bazel-rules/ ==="
+          ls -la build-system/bazel-rules/ || echo "❌ bazel-rules folder missing"
+          echo ""
+          echo "=== git submodule status ==="
+          git submodule status || true
+          echo ""
+          echo "=== rules_apple contents ==="
+          ls -la build-system/bazel-rules/rules_apple/ 2>&1 | head -10 || true
+          echo ""
+          echo "=== rules_swift contents ==="
+          ls -la build-system/bazel-rules/rules_swift/ 2>&1 | head -10 || true
+
       - name: Set active Xcode path
         run: |
           XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
@@ -29,11 +48,26 @@ jobs:
           mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
 
           cd /Users/Shared/telegram-ios
-          git submodule sync --recursive
-          git submodule update --init --recursive --force
 
-          echo "=== Checking submodules ==="
-          ls -la build-system/bazel-rules/ || echo "❌ bazel-rules missing"
+          # Пытаемся переинициализировать submodules
+          git submodule sync --recursive || true
+          git submodule update --init --recursive --force || true
+
+          # Проверка: если submodules всё ещё пусты — клонируем напрямую
+          if [ ! -f "build-system/bazel-rules/rules_apple/MODULE.bazel" ] && [ ! -f "build-system/bazel-rules/rules_apple/WORKSPACE" ]; then
+            echo "⚠️ rules_apple отсутствует, клонируем напрямую..."
+            rm -rf build-system/bazel-rules/rules_apple
+            git clone --depth 1 https://github.com/bazelbuild/rules_apple.git build-system/bazel-rules/rules_apple
+          fi
+
+          if [ ! -f "build-system/bazel-rules/rules_swift/MODULE.bazel" ] && [ ! -f "build-system/bazel-rules/rules_swift/WORKSPACE" ]; then
+            echo "⚠️ rules_swift отсутствует, клонируем напрямую..."
+            rm -rf build-system/bazel-rules/rules_swift
+            git clone --depth 1 https://github.com/bazelbuild/rules_swift.git build-system/bazel-rules/rules_swift
+          fi
+
+          echo "=== Final state of bazel-rules ==="
+          ls -la build-system/bazel-rules/
 
       - name: Inject Configuration, Secrets and Custom Metadata
         run: |
