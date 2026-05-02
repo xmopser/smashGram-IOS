@@ -31,25 +31,31 @@ jobs:
         run: |
           cd /Users/Shared/telegram-ios
 
-          # Создаём конфигурационный файл
+          # Новый формат конфигурации (актуальный для Make.py)
           cat << 'EOF' > build-system/appstore-configuration.json
           {
-            "apiId": ${{ secrets.TELEGRAM_API_ID }},
-            "apiHash": "${{ secrets.TELEGRAM_API_HASH }}",
-            "appBundleId": "com.smashgram.miokiru",
-            "isInternalBuild": false,
-            "isAppStoreBuild": false
+            "bundle_id": "com.smashgram.miokiru",
+            "api_id": ${{ secrets.TELEGRAM_API_ID }},
+            "api_hash": "${{ secrets.TELEGRAM_API_HASH }}",
+            "team_id": "",
+            "is_internal_build": false,
+            "is_appstore_build": false,
+            "app_specific_url_scheme": "",
+            "premium_iap_product_id": "",
+            "enable_siri": false,
+            "enable_icloud": false
           }
           EOF
 
-          # Устанавливаем Display Name через plutil (надёжно работает на macOS)
+          # Устанавливаем Display Name
           APP_DISPLAY_NAME="smashGram"
 
           find . -name "Info.plist" -exec sh -c '
             plutil -replace CFBundleDisplayName -string "$APP_DISPLAY_NAME" "{}"
           ' sh {} \;
 
-          echo "Display Name set to: $APP_DISPLAY_NAME"
+          echo "✅ Configuration file created:"
+          cat build-system/appstore-configuration.json
 
       - name: Build the App
         run: |
