@@ -45,7 +45,8 @@ jobs:
             "premium_iap_product_id": "",
             "enable_siri": false,
             "enable_icloud": false,
-            "additional_app_ids": []
+            "additional_app_ids": [],
+            "aps_environment": "development"
           }
           EOF
 
