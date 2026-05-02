@@ -46,16 +46,20 @@ jobs:
             "enable_siri": false,
             "enable_icloud": false,
             "additional_app_ids": [],
-            "aps_environment": null
+            "aps_environment": null,
+            "disable_push_notifications": true
           }
           EOF
 
           APP_DISPLAY_NAME="smashGram"
 
+          # Удаляем APS из всех plist и entitlements
           find . -name "Info.plist" -exec sh -c '
             plutil -replace CFBundleDisplayName -string "$APP_DISPLAY_NAME" "{}"
             plutil -remove "aps-environment" "{}" 2>/dev/null || true
           ' sh {} \;
+
+          find . -name "*.entitlements" -exec sed -i '' '/aps-environment/d' {} + 2>/dev/null || true
 
           echo "✅ Configuration file created:"
           cat build-system/appstore-configuration.json
@@ -81,8 +85,8 @@ jobs:
 
           python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
 
-          # Отключаем APS entitlement
-          echo "Disabling APS (Push Notifications)..."
+          # Дополнительное отключение APS
+          echo "Disabling APS entitlements..."
           find . -name "*.entitlements" -exec sed -i '' '/aps-environment/d' {} + 2>/dev/null || true
 
           python3 -u build-system/Make/Make.py \
@@ -105,38 +109,3 @@ jobs:
             cp -R "$f" build/DSYMs/
           done
           zip -r "./$OUTPUT_PATH/Telegram.DSYMs.zip" build/DSYMs 1>/dev/null
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: build-${{ env.BUILD_NUMBER }}
-          release_name: Telegram ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
-          body: |
-            An unsigned build of Telegram for iOS ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
-          draft: false
-          prerelease: false
-
-      - name: Upload Release IPA
-        id: upload-release-ipa 
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: /Users/Shared/telegram-ios/build/artifacts/Telegram.ipa
-          asset_name: Telegram.ipa
-          asset_content_type: application/zip
-
-      - name: Upload Release DSYM
-        id: upload-release-dsym 
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: /Users/Shared/telegram-ios/build/artifacts/Telegram.DSYMs.zip
-          asset_name: Telegram.DSYMs.zip
-          asset_content_type: application/zip
