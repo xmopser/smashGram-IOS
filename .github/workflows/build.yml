@@ -46,14 +46,17 @@ jobs:
             "enable_siri": false,
             "enable_icloud": false,
             "additional_app_ids": [],
-            "aps_environment": null
+            "aps_environment": null,
+            "disable_aps": true
           }
           EOF
 
           APP_DISPLAY_NAME="smashGram"
 
+          # Отключаем push entitlement в Info.plist
           find . -name "Info.plist" -exec sh -c '
             plutil -replace CFBundleDisplayName -string "$APP_DISPLAY_NAME" "{}"
+            plutil -remove "aps-environment" "{}" 2>/dev/null || true
           ' sh {} \;
 
           echo "✅ Configuration file created:"
