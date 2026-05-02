@@ -46,7 +46,7 @@ jobs:
             "enable_siri": false,
             "enable_icloud": false,
             "additional_app_ids": [],
-            "aps_environment": "development"
+            "aps_environment": null
           }
           EOF
 
