@@ -77,55 +77,6 @@ jobs:
               "$f" 2>/dev/null || true
           done
 
-      - name: Patch Telegram/BUILD and Make.py
-        run: |
-          cd /Users/Shared/telegram-ios
-
-          python3 - << 'PYEOF'
-          import re
-
-          # --- Патчим Telegram/BUILD ---
-          with open("Telegram/BUILD", "r") as f:
-              content = f.read()
-
-          original_len = len(content)
-
-          # Убираем строки с provisioning_profile = ...
-          content = re.sub(r'\s*provisioning_profile\s*=\s*"[^"]*",?', '', content)
-
-          # Убираем строки со ссылками на .mobileprovision
-          content = re.sub(r'[^\n]*\.mobileprovision[^\n]*\n', '', content)
-
-          with open("Telegram/BUILD", "w") as f:
-              f.write(content)
-
-          print(f"Telegram/BUILD patched: {original_len} -> {len(content)} bytes")
-
-          # --- Патчим Make.py ---
-          with open("build-system/Make/Make.py", "r") as f:
-              make_content = f.read()
-
-          make_content = re.sub(
-              r'(aps-environment[^\n]*\n\s*)(sys\.exit\(1\)|raise\s+\w+)',
-              r'\1pass  # patched',
-              make_content
-          )
-
-          with open("build-system/Make/Make.py", "w") as f:
-              f.write(make_content)
-
-          print("Make.py patched successfully")
-          PYEOF
-
-          # Патчим entitlements
-          find build-system/fake-codesigning -name "*.entitlements" | while read f; do
-            if ! grep -q "aps-environment" "$f"; then
-              LC_ALL=C sed -i '' \
-                's|</dict>|<key>aps-environment</key><string>development</string></dict>|' \
-                "$f" 2>/dev/null || true
-            fi
-          done
-
       - name: Generate fake provisioning profiles
         run: |
           cd /Users/Shared/telegram-ios
@@ -206,6 +157,54 @@ jobs:
           print("All provisioning profiles created")
           PYEOF
 
+      - name: Patch Telegram/BUILD and Make.py
+        run: |
+          cd /Users/Shared/telegram-ios
+
+          python3 - << 'PYEOF'
+          import re
+
+          with open("Telegram/BUILD", "r") as f:
+              content = f.read()
+
+          original_len = len(content)
+
+          # Заменяем все ссылки на любой .mobileprovision на Telegram.mobileprovision
+          content = re.sub(
+              r'@@build_configuration\+//provisioning:[A-Za-z0-9_]+\.mobileprovision',
+              '@@build_configuration+//provisioning:Telegram.mobileprovision',
+              content
+          )
+
+          with open("Telegram/BUILD", "w") as f:
+              f.write(content)
+
+          print(f"Telegram/BUILD patched: {original_len} -> {len(content)} bytes")
+
+          # Патчим Make.py
+          with open("build-system/Make/Make.py", "r") as f:
+              make_content = f.read()
+
+          make_content = re.sub(
+              r'(aps-environment[^\n]*\n\s*)(sys\.exit\(1\)|raise\s+\w+)',
+              r'\1pass  # patched',
+              make_content
+          )
+
+          with open("build-system/Make/Make.py", "w") as f:
+              f.write(make_content)
+
+          print("Make.py patched successfully")
+          PYEOF
+
+          find build-system/fake-codesigning -name "*.entitlements" | while read f; do
+            if ! grep -q "aps-environment" "$f"; then
+              LC_ALL=C sed -i '' \
+                's|</dict>|<key>aps-environment</key><string>development</string></dict>|' \
+                "$f" 2>/dev/null || true
+            fi
+          done
+
       - name: Build the App
         run: |
           set -x
@@ -215,7 +214,6 @@ jobs:
 
           cd $SOURCE_DIR
 
-          # Чистим bazel кэш
           rm -rf "$BAZEL_USER_ROOT"
 
           BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
