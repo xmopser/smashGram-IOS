@@ -77,65 +77,128 @@ jobs:
               "$f" 2>/dev/null || true
           done
 
-      - name: Patch fake-codesigning provisioning profiles and entitlements
+      - name: Generate fake provisioning profiles
         run: |
           cd /Users/Shared/telegram-ios
 
-          PROV_DIR="build-system/fake-codesigning/provisioning"
-          mkdir -p "$PROV_DIR"
+          python3 - << 'PYEOF'
+          import os
+          import subprocess
+          import plistlib
+          import tempfile
 
-          echo "=== Current provisioning files ==="
-          ls -la "$PROV_DIR/" || echo "empty"
+          prov_dir = "build-system/fake-codesigning/provisioning"
+          os.makedirs(prov_dir, exist_ok=True)
 
-          # Находим любой существующий .mobileprovision как шаблон
-          TEMPLATE=$(find "$PROV_DIR" -name "*.mobileprovision" | head -1)
+          # Все профили которые нужны build системе
+          profiles = [
+              "Telegram",
+              "NotificationContent",
+              "NotificationService",
+              "Share",
+              "Widget",
+              "WatchApp",
+              "WatchAppExtension",
+              "Intents",
+              "IntentsUI",
+              "BroadcastUpload",
+              "BroadcastUI",
+              "Siri",
+          ]
 
-          if [ -z "$TEMPLATE" ]; then
-            echo "No template found, fetching from original repo..."
-            git clone --depth=1 https://github.com/TelegramMessenger/Telegram-iOS.git /tmp/tg-prov
-            TEMPLATE=$(find /tmp/tg-prov/build-system/fake-codesigning/provisioning -name "*.mobileprovision" | head -1)
-            cp -f /tmp/tg-prov/build-system/fake-codesigning/provisioning/*.mobileprovision "$PROV_DIR/" 2>/dev/null || true
-            TEMPLATE=$(find "$PROV_DIR" -name "*.mobileprovision" | head -1)
-          fi
+          # Минимальный plist для fake mobileprovision
+          def make_plist(name):
+              return {
+                  "AppIDName": name,
+                  "ApplicationIdentifierPrefix": ["FAKETEAMID"],
+                  "CreationDate": "2024-01-01T00:00:00Z",
+                  "DeveloperCertificates": [],
+                  "Entitlements": {
+                      "application-identifier": f"FAKETEAMID.com.smashgram.miokiru",
+                      "aps-environment": "development",
+                      "get-task-allow": True,
+                  },
+                  "ExpirationDate": "2099-01-01T00:00:00Z",
+                  "Name": name,
+                  "Platform": ["iOS"],
+                  "TeamIdentifier": ["FAKETEAMID"],
+                  "TeamName": "Fake Team",
+                  "TimeToLive": 365,
+                  "UUID": "00000000-0000-0000-0000-000000000000",
+                  "Version": 1,
+              }
 
-          echo "Using template: $TEMPLATE"
+          # Создаём fake cert для подписи
+          cert_dir = "build-system/fake-codesigning/certs"
 
-          # Список всех нужных профилей
-          PROFILES=(
-            "Telegram"
-            "NotificationContent"
-            "NotificationService"
-            "Share"
-            "Widget"
-            "WatchApp"
-            "WatchAppExtension"
-            "Intents"
-            "IntentsUI"
-            "BroadcastUpload"
-            "BroadcastUI"
-            "Siri"
-          )
+          # Генерируем self-signed cert если нет
+          key_path = "/tmp/fake.key"
+          cert_path = "/tmp/fake.crt"
+          if not os.path.exists(key_path):
+              subprocess.run([
+                  "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                  "-keyout", key_path,
+                  "-out", cert_path,
+                  "-days", "36500",
+                  "-nodes",
+                  "-subj", "/CN=FakeCodesign/O=Fake/C=US"
+              ], check=True, capture_output=True)
 
-          for name in "${PROFILES[@]}"; do
-            if [ ! -f "$PROV_DIR/${name}.mobileprovision" ]; then
-              echo "Creating fake: ${name}.mobileprovision"
-              cp "$TEMPLATE" "$PROV_DIR/${name}.mobileprovision"
-            fi
-          done
+          for name in profiles:
+              out_path = f"{prov_dir}/{name}.mobileprovision"
+              if os.path.exists(out_path):
+                  print(f"Already exists: {name}.mobileprovision")
+                  continue
 
-          echo "=== Provisioning files after patch ==="
-          ls -la "$PROV_DIR/"
+              # Plist как данные
+              plist_data = plistlib.dumps(make_plist(name))
 
-          # Патчим BUILD файл — добавляем недостающие targets
-          BUILD_FILE="$PROV_DIR/../BUILD"
-          if [ ! -f "$BUILD_FILE" ]; then
-            BUILD_FILE="$PROV_DIR/BUILD"
-          fi
+              # Оборачиваем в CMS (PKCS7) signed data используя openssl
+              with tempfile.NamedTemporaryFile(suffix=".plist", delete=False) as f:
+                  f.write(plist_data)
+                  plist_tmp = f.name
 
-          echo "=== BUILD file ==="
-          cat "$BUILD_FILE" 2>/dev/null || echo "BUILD not found at $BUILD_FILE"
+              try:
+                  result = subprocess.run([
+                      "openssl", "smime", "-sign",
+                      "-in", plist_tmp,
+                      "-signer", cert_path,
+                      "-inkey", key_path,
+                      "-certfile", cert_path,
+                      "-outform", "DER",
+                      "-nodetach",
+                      "-out", out_path
+                  ], capture_output=True)
 
-          # Патчим entitlements
+                  if result.returncode == 0:
+                      print(f"Created: {name}.mobileprovision")
+                  else:
+                      # Fallback: просто копируем plist как есть
+                      with open(out_path, "wb") as f:
+                          f.write(plist_data)
+                      print(f"Created (plist fallback): {name}.mobileprovision")
+              finally:
+                  os.unlink(plist_tmp)
+
+          # Генерируем BUILD файл
+          build_content = 'package(default_visibility = ["//visibility:public"])\n\n'
+          for name in profiles:
+              filename = f"{name}.mobileprovision"
+              build_content += f'filegroup(\n    name = "{filename}",\n    srcs = ["{filename}"],\n)\n\n'
+
+          with open(f"{prov_dir}/BUILD", "w") as f:
+              f.write(build_content)
+
+          print("\nBUILD file generated")
+          print("Done! Files:")
+          for f in os.listdir(prov_dir):
+              print(f"  {f}")
+          PYEOF
+
+      - name: Patch entitlements and Make.py
+        run: |
+          cd /Users/Shared/telegram-ios
+
           find build-system/fake-codesigning -name "*.entitlements" | while read f; do
             if ! grep -q "aps-environment" "$f"; then
               LC_ALL=C sed -i '' \
@@ -144,7 +207,6 @@ jobs:
             fi
           done
 
-          # Патчим Make.py
           python3 - << 'PYEOF'
           import re
 
@@ -161,38 +223,6 @@ jobs:
               f.write(content)
 
           print("Make.py patched successfully")
-          PYEOF
-
-      - name: Patch provisioning BUILD file
-        run: |
-          cd /Users/Shared/telegram-ios
-
-          # Находим BUILD файл provisioning в bazel cache или локально
-          PROV_DIR="build-system/fake-codesigning/provisioning"
-
-          # Генерируем BUILD файл со всеми нужными файлами
-          python3 - << 'PYEOF'
-          import os
-          import glob
-
-          prov_dir = "build-system/fake-codesigning/provisioning"
-          files = glob.glob(f"{prov_dir}/*.mobileprovision")
-          
-          build_content = 'package(default_visibility = ["//visibility:public"])\n\n'
-          
-          for f in files:
-              name = os.path.basename(f)
-              target = name.replace(".mobileprovision", "")
-              build_content += f'filegroup(\n'
-              build_content += f'    name = "{name}",\n'
-              build_content += f'    srcs = ["{name}"],\n'
-              build_content += f')\n\n'
-          
-          with open(f"{prov_dir}/BUILD", "w") as f:
-              f.write(build_content)
-          
-          print("BUILD file generated:")
-          print(build_content)
           PYEOF
 
       - name: Build the App
