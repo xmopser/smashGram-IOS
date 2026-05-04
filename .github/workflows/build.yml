@@ -17,24 +17,36 @@ jobs:
           git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /Users/Shared/telegram-ios
           cd /Users/Shared/telegram-ios
           git checkout ${{ github.sha }}
+          git submodule update --init --recursive --jobs=4 || true
 
-          echo "=== Submodule list ==="
-          git submodule status
+      - name: Fetch missing bazel-rules from original repo
+        run: |
+          cd /Users/Shared/telegram-ios
 
-          echo "=== Initializing submodules ==="
-          git submodule update --init --recursive --jobs=4
+          # Проверяем есть ли сабмодули
+          MISSING=false
+          for dir in apple_support rules_swift rules_xcodeproj rules_apple; do
+            if [ ! -f "build-system/bazel-rules/$dir/BUILD" ] && \
+               [ ! -f "build-system/bazel-rules/$dir/BUILD.bazel" ] && \
+               [ ! -f "build-system/bazel-rules/$dir/WORKSPACE" ]; then
+              echo "MISSING: build-system/bazel-rules/$dir"
+              MISSING=true
+            fi
+          done
 
-          echo "=== Checking bazel-rules ==="
-          ls -la build-system/bazel-rules/ || echo "MISSING: bazel-rules dir"
-
-          echo "=== Checking rules_swift ==="
-          ls -la build-system/bazel-rules/rules_swift/ || echo "MISSING: rules_swift"
-
-          echo "=== Checking rules_xcodeproj ==="
-          ls -la build-system/bazel-rules/rules_xcodeproj/ || echo "MISSING: rules_xcodeproj"
-
-          echo "=== .gitmodules ==="
-          cat .gitmodules || echo "NO .gitmodules FILE"
+          if [ "$MISSING" = true ]; then
+            echo "Cloning original telegram-ios to get bazel-rules..."
+            git clone --depth=1 https://github.com/TelegramMessenger/Telegram-iOS.git /tmp/tg-reference
+            cd /tmp/tg-reference
+            git submodule update --init --recursive --jobs=4 build-system/bazel-rules/
+            
+            # Копируем bazel-rules в наш проект
+            cp -Rf /tmp/tg-reference/build-system/bazel-rules/. /Users/Shared/telegram-ios/build-system/bazel-rules/
+            echo "bazel-rules copied successfully"
+            ls -la /Users/Shared/telegram-ios/build-system/bazel-rules/
+          else
+            echo "All bazel-rules present, skipping"
+          fi
 
       - name: Set active Xcode path
         run: |
