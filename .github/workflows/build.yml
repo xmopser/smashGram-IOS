@@ -14,10 +14,27 @@ jobs:
         run: |
           sudo mkdir -p /Users/Shared/telegram-ios
           sudo chown -R runner /Users/Shared/telegram-ios
-          git clone --recursive https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /Users/Shared/telegram-ios
+          git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /Users/Shared/telegram-ios
           cd /Users/Shared/telegram-ios
           git checkout ${{ github.sha }}
-          git submodule update --init --recursive
+
+          echo "=== Submodule list ==="
+          git submodule status
+
+          echo "=== Initializing submodules ==="
+          git submodule update --init --recursive --jobs=4
+
+          echo "=== Checking bazel-rules ==="
+          ls -la build-system/bazel-rules/ || echo "MISSING: bazel-rules dir"
+
+          echo "=== Checking rules_swift ==="
+          ls -la build-system/bazel-rules/rules_swift/ || echo "MISSING: rules_swift"
+
+          echo "=== Checking rules_xcodeproj ==="
+          ls -la build-system/bazel-rules/rules_xcodeproj/ || echo "MISSING: rules_xcodeproj"
+
+          echo "=== .gitmodules ==="
+          cat .gitmodules || echo "NO .gitmodules FILE"
 
       - name: Set active Xcode path
         run: |
