@@ -77,6 +77,55 @@ jobs:
               "$f" 2>/dev/null || true
           done
 
+      - name: Patch Telegram/BUILD and Make.py
+        run: |
+          cd /Users/Shared/telegram-ios
+
+          python3 - << 'PYEOF'
+          import re
+
+          # --- Патчим Telegram/BUILD ---
+          with open("Telegram/BUILD", "r") as f:
+              content = f.read()
+
+          original_len = len(content)
+
+          # Убираем строки с provisioning_profile = ...
+          content = re.sub(r'\s*provisioning_profile\s*=\s*"[^"]*",?', '', content)
+
+          # Убираем строки со ссылками на .mobileprovision
+          content = re.sub(r'[^\n]*\.mobileprovision[^\n]*\n', '', content)
+
+          with open("Telegram/BUILD", "w") as f:
+              f.write(content)
+
+          print(f"Telegram/BUILD patched: {original_len} -> {len(content)} bytes")
+
+          # --- Патчим Make.py ---
+          with open("build-system/Make/Make.py", "r") as f:
+              make_content = f.read()
+
+          make_content = re.sub(
+              r'(aps-environment[^\n]*\n\s*)(sys\.exit\(1\)|raise\s+\w+)',
+              r'\1pass  # patched',
+              make_content
+          )
+
+          with open("build-system/Make/Make.py", "w") as f:
+              f.write(make_content)
+
+          print("Make.py patched successfully")
+          PYEOF
+
+          # Патчим entitlements
+          find build-system/fake-codesigning -name "*.entitlements" | while read f; do
+            if ! grep -q "aps-environment" "$f"; then
+              LC_ALL=C sed -i '' \
+                's|</dict>|<key>aps-environment</key><string>development</string></dict>|' \
+                "$f" 2>/dev/null || true
+            fi
+          done
+
       - name: Generate fake provisioning profiles
         run: |
           cd /Users/Shared/telegram-ios
@@ -91,18 +140,9 @@ jobs:
           os.makedirs(prov_dir, exist_ok=True)
 
           profiles = [
-              "Telegram",
-              "NotificationContent",
-              "NotificationService",
-              "Share",
-              "Widget",
-              "WatchApp",
-              "WatchAppExtension",
-              "Intents",
-              "IntentsUI",
-              "BroadcastUpload",
-              "BroadcastUI",
-              "Siri",
+              "Telegram", "NotificationContent", "NotificationService",
+              "Share", "Widget", "WatchApp", "WatchAppExtension",
+              "Intents", "IntentsUI", "BroadcastUpload", "BroadcastUI", "Siri",
           ]
 
           def make_plist(name):
@@ -130,43 +170,31 @@ jobs:
           cert_path = "/tmp/fake.crt"
           subprocess.run([
               "openssl", "req", "-x509", "-newkey", "rsa:2048",
-              "-keyout", key_path,
-              "-out", cert_path,
-              "-days", "36500",
-              "-nodes",
+              "-keyout", key_path, "-out", cert_path,
+              "-days", "36500", "-nodes",
               "-subj", "/CN=FakeCodesign/O=Fake/C=US"
           ], check=True, capture_output=True)
 
           for name in profiles:
               out_path = f"{prov_dir}/{name}.mobileprovision"
               plist_data = plistlib.dumps(make_plist(name))
-
               with tempfile.NamedTemporaryFile(suffix=".plist", delete=False) as f:
                   f.write(plist_data)
                   plist_tmp = f.name
-
               try:
                   result = subprocess.run([
                       "openssl", "smime", "-sign",
-                      "-in", plist_tmp,
-                      "-signer", cert_path,
-                      "-inkey", key_path,
-                      "-certfile", cert_path,
-                      "-outform", "DER",
-                      "-nodetach",
-                      "-out", out_path
+                      "-in", plist_tmp, "-signer", cert_path,
+                      "-inkey", key_path, "-certfile", cert_path,
+                      "-outform", "DER", "-nodetach", "-out", out_path
                   ], capture_output=True)
-
-                  if result.returncode == 0:
-                      print(f"Created: {name}.mobileprovision")
-                  else:
+                  if result.returncode != 0:
                       with open(out_path, "wb") as f:
                           f.write(plist_data)
-                      print(f"Created (plist fallback): {name}.mobileprovision")
+                  print(f"Created: {name}.mobileprovision")
               finally:
                   os.unlink(plist_tmp)
 
-          # Генерируем BUILD файл
           build_content = 'package(default_visibility = ["//visibility:public"])\n\n'
           for name in profiles:
               filename = f"{name}.mobileprovision"
@@ -175,41 +203,7 @@ jobs:
           with open(f"{prov_dir}/BUILD", "w") as f:
               f.write(build_content)
 
-          print("BUILD file:")
-          print(build_content)
-          print("All files:")
-          for f in sorted(os.listdir(prov_dir)):
-              print(f"  {f}")
-          PYEOF
-
-      - name: Patch entitlements and Make.py
-        run: |
-          cd /Users/Shared/telegram-ios
-
-          find build-system/fake-codesigning -name "*.entitlements" | while read f; do
-            if ! grep -q "aps-environment" "$f"; then
-              LC_ALL=C sed -i '' \
-                's|</dict>|<key>aps-environment</key><string>development</string></dict>|' \
-                "$f" 2>/dev/null || true
-            fi
-          done
-
-          python3 - << 'PYEOF'
-          import re
-
-          with open("build-system/Make/Make.py", "r") as f:
-              content = f.read()
-
-          content = re.sub(
-              r'(aps-environment[^\n]*\n\s*)(sys\.exit\(1\)|raise\s+\w+)',
-              r'\1pass  # patched',
-              content
-          )
-
-          with open("build-system/Make/Make.py", "w") as f:
-              f.write(content)
-
-          print("Make.py patched successfully")
+          print("All provisioning profiles created")
           PYEOF
 
       - name: Build the App
@@ -221,7 +215,7 @@ jobs:
 
           cd $SOURCE_DIR
 
-          # Чистим bazel кэш чтобы подхватил наши provisioning файлы
+          # Чистим bazel кэш
           rm -rf "$BAZEL_USER_ROOT"
 
           BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
