@@ -33,12 +33,18 @@ jobs:
 
           cat << EOF > build-system/appstore-configuration.json
           {
-            "apiId": "${{ secrets.TELEGRAM_API_ID }}",
-            "apiHash": "${{ secrets.TELEGRAM_API_HASH }}",
-            "appBundleId": "com.smashgram.miokiru",
-            "teamId": "FAKETEAMID",
-            "isInternalBuild": false,
-            "isAppStoreBuild": false
+            "bundle_id": "com.smashgram.miokiru",
+            "api_id": "${{ secrets.TELEGRAM_API_ID }}",
+            "api_hash": "${{ secrets.TELEGRAM_API_HASH }}",
+            "team_id": "FAKETEAMID",
+            "app_center_id": 0,
+            "is_internal_build": "false",
+            "is_appstore_build": "false",
+            "appstore_id": "0",
+            "app_specific_url_scheme": "tgapp",
+            "premium_iap_product_id": "",
+            "enable_siri": false,
+            "enable_icloud": false
           }
           EOF
 
