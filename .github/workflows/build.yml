@@ -27,6 +27,12 @@ jobs:
           cp -R $GITHUB_WORKSPACE /Users/Shared/
           mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
 
+      - name: Initialize submodules in canonical directory
+        run: |
+          cd /Users/Shared/telegram-ios
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
       - name: Inject Configuration, Secrets and Custom Metadata
         run: |
           cd /Users/Shared/telegram-ios
@@ -59,9 +65,7 @@ jobs:
         run: |
           cd /Users/Shared/telegram-ios
 
-          # Добавляем aps-environment во все entitlements файлы
           find build-system/fake-codesigning -name "*.entitlements" | while read f; do
-            # Проверяем есть ли уже aps-environment
             if ! grep -q "aps-environment" "$f"; then
               LC_ALL=C sed -i '' \
                 's|</dict>|<key>aps-environment</key><string>development</string></dict>|' \
@@ -69,19 +73,12 @@ jobs:
             fi
           done
 
-          # Патчим Make.py чтобы не падал на проверке aps-environment
-          LC_ALL=C sed -i '' \
-            's/Could not find a valid aps-environment/Skipping aps-environment check/g' \
-            build-system/Make/Make.py 2>/dev/null || true
-
-          # Альтернатива: комментируем raise/exit при ошибке aps-environment
           python3 - << 'PYEOF'
           import re
 
           with open("build-system/Make/Make.py", "r") as f:
               content = f.read()
 
-          # Заменяем exit/raise после aps-environment ошибки на pass
           content = re.sub(
               r'(aps-environment[^\n]*\n\s*)(sys\.exit\(1\)|raise\s+\w+)',
               r'\1pass  # patched: skip aps-environment check',
