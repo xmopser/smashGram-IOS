@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, main ]
   workflow_dispatch:
 
 jobs:
@@ -10,28 +10,19 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: 'recursive'
-          fetch-depth: '0'
+      - name: Checkout into canonical directory
+        run: |
+          sudo mkdir -p /Users/Shared/telegram-ios
+          sudo chown -R runner /Users/Shared/telegram-ios
+          git clone --recursive https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /Users/Shared/telegram-ios
+          cd /Users/Shared/telegram-ios
+          git checkout ${{ github.sha }}
+          git submodule update --init --recursive
 
       - name: Set active Xcode path
         run: |
-          XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
+          XCODE_VERSION=$(cat /Users/Shared/telegram-ios/versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
           sudo xcode-select -s /Applications/Xcode_$XCODE_VERSION.app/Contents/Developer
-
-      - name: Create canonical source directory
-        run: |
-          set -x
-          sudo mkdir -p /Users/Shared
-          cp -R $GITHUB_WORKSPACE /Users/Shared/
-          mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
-
-      - name: Initialize submodules in canonical directory
-        run: |
-          cd /Users/Shared/telegram-ios
-          git submodule sync --recursive
-          git submodule update --init --recursive
 
       - name: Inject Configuration, Secrets and Custom Metadata
         run: |
