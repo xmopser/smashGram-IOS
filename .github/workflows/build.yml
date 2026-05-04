@@ -23,7 +23,6 @@ jobs:
         run: |
           cd /Users/Shared/telegram-ios
 
-          # Проверяем есть ли сабмодули
           MISSING=false
           for dir in apple_support rules_swift rules_xcodeproj rules_apple; do
             if [ ! -f "build-system/bazel-rules/$dir/BUILD" ] && \
@@ -39,11 +38,8 @@ jobs:
             git clone --depth=1 https://github.com/TelegramMessenger/Telegram-iOS.git /tmp/tg-reference
             cd /tmp/tg-reference
             git submodule update --init --recursive --jobs=4 build-system/bazel-rules/
-            
-            # Копируем bazel-rules в наш проект
             cp -Rf /tmp/tg-reference/build-system/bazel-rules/. /Users/Shared/telegram-ios/build-system/bazel-rules/
             echo "bazel-rules copied successfully"
-            ls -la /Users/Shared/telegram-ios/build-system/bazel-rules/
           else
             echo "All bazel-rules present, skipping"
           fi
@@ -81,10 +77,65 @@ jobs:
               "$f" 2>/dev/null || true
           done
 
-      - name: Patch fake-codesigning entitlements
+      - name: Patch fake-codesigning provisioning profiles and entitlements
         run: |
           cd /Users/Shared/telegram-ios
 
+          PROV_DIR="build-system/fake-codesigning/provisioning"
+          mkdir -p "$PROV_DIR"
+
+          echo "=== Current provisioning files ==="
+          ls -la "$PROV_DIR/" || echo "empty"
+
+          # Находим любой существующий .mobileprovision как шаблон
+          TEMPLATE=$(find "$PROV_DIR" -name "*.mobileprovision" | head -1)
+
+          if [ -z "$TEMPLATE" ]; then
+            echo "No template found, fetching from original repo..."
+            git clone --depth=1 https://github.com/TelegramMessenger/Telegram-iOS.git /tmp/tg-prov
+            TEMPLATE=$(find /tmp/tg-prov/build-system/fake-codesigning/provisioning -name "*.mobileprovision" | head -1)
+            cp -f /tmp/tg-prov/build-system/fake-codesigning/provisioning/*.mobileprovision "$PROV_DIR/" 2>/dev/null || true
+            TEMPLATE=$(find "$PROV_DIR" -name "*.mobileprovision" | head -1)
+          fi
+
+          echo "Using template: $TEMPLATE"
+
+          # Список всех нужных профилей
+          PROFILES=(
+            "Telegram"
+            "NotificationContent"
+            "NotificationService"
+            "Share"
+            "Widget"
+            "WatchApp"
+            "WatchAppExtension"
+            "Intents"
+            "IntentsUI"
+            "BroadcastUpload"
+            "BroadcastUI"
+            "Siri"
+          )
+
+          for name in "${PROFILES[@]}"; do
+            if [ ! -f "$PROV_DIR/${name}.mobileprovision" ]; then
+              echo "Creating fake: ${name}.mobileprovision"
+              cp "$TEMPLATE" "$PROV_DIR/${name}.mobileprovision"
+            fi
+          done
+
+          echo "=== Provisioning files after patch ==="
+          ls -la "$PROV_DIR/"
+
+          # Патчим BUILD файл — добавляем недостающие targets
+          BUILD_FILE="$PROV_DIR/../BUILD"
+          if [ ! -f "$BUILD_FILE" ]; then
+            BUILD_FILE="$PROV_DIR/BUILD"
+          fi
+
+          echo "=== BUILD file ==="
+          cat "$BUILD_FILE" 2>/dev/null || echo "BUILD not found at $BUILD_FILE"
+
+          # Патчим entitlements
           find build-system/fake-codesigning -name "*.entitlements" | while read f; do
             if ! grep -q "aps-environment" "$f"; then
               LC_ALL=C sed -i '' \
@@ -93,6 +144,7 @@ jobs:
             fi
           done
 
+          # Патчим Make.py
           python3 - << 'PYEOF'
           import re
 
@@ -101,7 +153,7 @@ jobs:
 
           content = re.sub(
               r'(aps-environment[^\n]*\n\s*)(sys\.exit\(1\)|raise\s+\w+)',
-              r'\1pass  # patched: skip aps-environment check',
+              r'\1pass  # patched',
               content
           )
 
@@ -109,6 +161,38 @@ jobs:
               f.write(content)
 
           print("Make.py patched successfully")
+          PYEOF
+
+      - name: Patch provisioning BUILD file
+        run: |
+          cd /Users/Shared/telegram-ios
+
+          # Находим BUILD файл provisioning в bazel cache или локально
+          PROV_DIR="build-system/fake-codesigning/provisioning"
+
+          # Генерируем BUILD файл со всеми нужными файлами
+          python3 - << 'PYEOF'
+          import os
+          import glob
+
+          prov_dir = "build-system/fake-codesigning/provisioning"
+          files = glob.glob(f"{prov_dir}/*.mobileprovision")
+          
+          build_content = 'package(default_visibility = ["//visibility:public"])\n\n'
+          
+          for f in files:
+              name = os.path.basename(f)
+              target = name.replace(".mobileprovision", "")
+              build_content += f'filegroup(\n'
+              build_content += f'    name = "{name}",\n'
+              build_content += f'    srcs = ["{name}"],\n'
+              build_content += f')\n\n'
+          
+          with open(f"{prov_dir}/BUILD", "w") as f:
+              f.write(build_content)
+          
+          print("BUILD file generated:")
+          print(build_content)
           PYEOF
 
       - name: Build the App
