@@ -43,8 +43,11 @@ jobs:
           EOF
 
           APP_DISPLAY_NAME="smashGram"
-          find . -name "Info.plist" -exec sed -i '' \
-            -e 's/<key>CFBundleDisplayName<\/key>[[:space:]]*<string>[^<]*<\/string>/<key>CFBundleDisplayName<\/key><string>'"$APP_DISPLAY_NAME"'<\/string>/g' {} +
+          find . -name "Info.plist" | while read f; do
+            LC_ALL=C sed -i '' \
+              -e 's/<key>CFBundleDisplayName<\/key>[[:space:]]*<string>[^<]*<\/string>/<key>CFBundleDisplayName<\/key><string>'"$APP_DISPLAY_NAME"'<\/string>/g' \
+              "$f" 2>/dev/null || true
+          done
 
       - name: Build the App
         run: |
