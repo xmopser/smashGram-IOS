@@ -3,36 +3,18 @@ name: CI
 on:
   push:
     branches: [ master ]
+
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-lastest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
         with:
           submodules: 'recursive'
           fetch-depth: '0'
-
-      - name: Diagnose submodules
-        run: |
-          set -x
-          cd $GITHUB_WORKSPACE
-          echo "=== .gitmodules ==="
-          cat .gitmodules || echo "❌ .gitmodules missing!"
-          echo ""
-          echo "=== build-system/bazel-rules/ ==="
-          ls -la build-system/bazel-rules/ || echo "❌ bazel-rules folder missing"
-          echo ""
-          echo "=== git submodule status ==="
-          git submodule status || true
-          echo ""
-          echo "=== rules_apple contents ==="
-          ls -la build-system/bazel-rules/rules_apple/ 2>&1 | head -10 || true
-          echo ""
-          echo "=== rules_swift contents ==="
-          ls -la build-system/bazel-rules/rules_swift/ 2>&1 | head -10 || true
 
       - name: Set active Xcode path
         run: |
@@ -43,31 +25,8 @@ jobs:
         run: |
           set -x
           sudo mkdir -p /Users/Shared
-          sudo chown -R $(whoami) /Users/Shared
           cp -R $GITHUB_WORKSPACE /Users/Shared/
           mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
-
-          cd /Users/Shared/telegram-ios
-
-          # Пытаемся переинициализировать submodules
-          git submodule sync --recursive || true
-          git submodule update --init --recursive --force || true
-
-          # Проверка: если submodules всё ещё пусты — клонируем напрямую
-          if [ ! -f "build-system/bazel-rules/rules_apple/MODULE.bazel" ] && [ ! -f "build-system/bazel-rules/rules_apple/WORKSPACE" ]; then
-            echo "⚠️ rules_apple отсутствует, клонируем напрямую..."
-            rm -rf build-system/bazel-rules/rules_apple
-            git clone --depth 1 https://github.com/bazelbuild/rules_apple.git build-system/bazel-rules/rules_apple
-          fi
-
-          if [ ! -f "build-system/bazel-rules/rules_swift/MODULE.bazel" ] && [ ! -f "build-system/bazel-rules/rules_swift/WORKSPACE" ]; then
-            echo "⚠️ rules_swift отсутствует, клонируем напрямую..."
-            rm -rf build-system/bazel-rules/rules_swift
-            git clone --depth 1 https://github.com/bazelbuild/rules_swift.git build-system/bazel-rules/rules_swift
-          fi
-
-          echo "=== Final state of bazel-rules ==="
-          ls -la build-system/bazel-rules/
 
       - name: Inject Configuration, Secrets and Custom Metadata
         run: |
@@ -75,35 +34,26 @@ jobs:
 
           cat << 'EOF' > build-system/appstore-configuration.json
           {
-            "bundle_id": "com.smashgram.miokiru",
-            "api_id": ${{ secrets.TELEGRAM_API_ID }},
-            "api_hash": "${{ secrets.TELEGRAM_API_HASH }}",
-            "team_id": "",
-            "app_center_id": "",
-            "appstore_id": "",
-            "is_internal_build": false,
-            "is_appstore_build": false,
-            "app_specific_url_scheme": "",
-            "premium_iap_product_id": "",
-            "enable_siri": false,
-            "enable_icloud": false,
-            "additional_app_ids": []
+            "apiId": ${{ secrets.TELEGRAM_API_ID }},
+            "apiHash": "${{ secrets.TELEGRAM_API_HASH }}",
+            "appBundleId": "com.smashgram.miokiru",
+            "isInternalBuild": false,
+            "isAppStoreBuild": false
           }
           EOF
 
           APP_DISPLAY_NAME="smashGram"
-          find . -name "Info.plist" -exec sh -c '
-            plutil -replace CFBundleDisplayName -string "'"$APP_DISPLAY_NAME"'" "{}"
-          ' sh {} \;
 
-          echo "✅ Configuration created:"
-          cat build-system/appstore-configuration.json
+          find . -name "Info.plist" -exec sed -i '' -e 's/<key>CFBundleDisplayName<\/key>[[:space:]]*<string>[^<]*<\/string>/<key>CFBundleDisplayName<\/key><string>'"$APP_DISPLAY_NAME"'<\/string>/g' {} +
 
       - name: Build the App
         run: |
           set -x
 
+          # source code paths are included in the final binary, so we need to make them stable across builds
           SOURCE_DIR=/Users/Shared/telegram-ios
+
+          # use canonical bazel root
           BAZEL_USER_ROOT="/private/var/tmp/_bazel_containerhost"
 
           cd $SOURCE_DIR
@@ -114,26 +64,10 @@ jobs:
           export COMMIT_COUNT=$(git rev-list --count HEAD)
           export COMMIT_COUNT="$(($COMMIT_COUNT+$BUILD_NUMBER_OFFSET))"
           export BUILD_NUMBER="$COMMIT_COUNT"
-
-          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
-          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+          echo "BUILD_NUMBER=$(echo $BUILD_NUMBER)" >> $GITHUB_ENV
+          echo "APP_VERSION=$(echo $APP_VERSION)" >> $GITHUB_ENV
 
           python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
-
-          # Патч: убираем жёсткий exit(1) при отсутствии aps-environment
-          python3 - <<'PYEOF'
-          import pathlib, re
-          p = pathlib.Path("build-system/Make/Make.py")
-          s = p.read_text()
-          new_s, n = re.subn(
-              r"if codesigning_data\.aps_environment is None:\s*\n\s*print\([^\n]*\)\s*\n\s*sys\.exit\(1\)",
-              'if codesigning_data.aps_environment is None:\n        codesigning_data.aps_environment = "development"',
-              s
-          )
-          p.write_text(new_s)
-          print(f"✅ Make.py patched ({n} replacement)")
-          PYEOF
-
           python3 -u build-system/Make/Make.py \
             --bazelUserRoot="$BAZEL_USER_ROOT" \
             build \
@@ -142,13 +76,15 @@ jobs:
             --configuration=release_arm64 \
             --buildNumber="$BUILD_NUMBER"
 
+          # collect ipa
           OUTPUT_PATH="build/artifacts"
           rm -rf "$OUTPUT_PATH"
           mkdir -p "$OUTPUT_PATH"
           for f in bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/Telegram.ipa; do
-            cp "$f" "$OUTPUT_PATH/"
+            cp "$f" $OUTPUT_PATH/
           done
 
+          # collect dsym
           mkdir -p build/DSYMs
           for f in bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/*.dSYM; do
             cp -R "$f" build/DSYMs/
@@ -169,6 +105,7 @@ jobs:
           prerelease: false
 
       - name: Upload Release IPA
+        id: upload-release-ipa 
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -179,6 +116,7 @@ jobs:
           asset_content_type: application/zip
 
       - name: Upload Release DSYM
+        id: upload-release-dsym 
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
